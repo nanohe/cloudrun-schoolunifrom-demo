@@ -12,6 +12,15 @@ app.use(express.json());
 app.use(cors());
 app.use(logger);
 
+// 健康检查端点
+app.get("/health", (req, res) => {
+  res.status(200).json({ 
+    status: "ok", 
+    timestamp: new Date().toISOString(),
+    port: process.env.PORT || 80
+  });
+});
+
 // 首页
 app.get("/", async (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
@@ -19,27 +28,43 @@ app.get("/", async (req, res) => {
 
 // 更新计数
 app.post("/api/count", async (req, res) => {
-  const { action } = req.body;
-  if (action === "inc") {
-    await Counter.create();
-  } else if (action === "clear") {
-    await Counter.destroy({
-      truncate: true,
+  try {
+    const { action } = req.body;
+    if (action === "inc") {
+      await Counter.create();
+    } else if (action === "clear") {
+      await Counter.destroy({
+        truncate: true,
+      });
+    }
+    res.send({
+      code: 0,
+      data: await Counter.count(),
+    });
+  } catch (error) {
+    console.error("Count API error:", error);
+    res.status(500).send({
+      code: -1,
+      error: error.message,
     });
   }
-  res.send({
-    code: 0,
-    data: await Counter.count(),
-  });
 });
 
 // 获取计数
 app.get("/api/count", async (req, res) => {
-  const result = await Counter.count();
-  res.send({
-    code: 0,
-    data: result,
-  });
+  try {
+    const result = await Counter.count();
+    res.send({
+      code: 0,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Get count error:", error);
+    res.status(500).send({
+      code: -1,
+      error: error.message,
+    });
+  }
 });
 
 // 小程序调用，获取微信 Open ID
@@ -52,10 +77,37 @@ app.get("/api/wx_openid", async (req, res) => {
 const port = process.env.PORT || 80;
 
 async function bootstrap() {
-  await initDB();
-  app.listen(port, () => {
-    console.log("启动成功", port);
-  });
+  try {
+    console.log("正在启动应用...");
+    console.log("端口:", port);
+    console.log("数据库地址:", process.env.MYSQL_ADDRESS);
+    
+    // 先启动服务器，再初始化数据库
+    const server = app.listen(port, '0.0.0.0', () => {
+      console.log(`服务器启动成功，监听端口 ${port}`);
+    });
+
+    // 异步初始化数据库，不阻塞服务器启动
+    initDB().then(() => {
+      console.log("数据库初始化成功");
+    }).catch((error) => {
+      console.error("数据库初始化失败:", error);
+      // 不退出进程，让服务器继续运行
+    });
+
+    // 优雅关闭
+    process.on('SIGTERM', () => {
+      console.log('收到 SIGTERM 信号，正在关闭服务器...');
+      server.close(() => {
+        console.log('服务器已关闭');
+        process.exit(0);
+      });
+    });
+
+  } catch (error) {
+    console.error("启动失败:", error);
+    process.exit(1);
+  }
 }
 
 bootstrap();
